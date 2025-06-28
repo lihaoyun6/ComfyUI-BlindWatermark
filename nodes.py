@@ -256,7 +256,7 @@ class DecodeBlindWatermarkAdvanced:
         if original_width != -1 and original_height != -1:
             original_size = (original_width, original_height)
             if input.size != original_size:
-                input.resize(original_size)
+                input = input.resize(original_size)
         
         input = np.array(input)[:, :, ::-1]
         bwm = watermark(seed_a, seed_b, strength, wm_shape=(64, 64), block_shape=(int(block_size),int(block_size)), dwt_deep=int(robustness))
