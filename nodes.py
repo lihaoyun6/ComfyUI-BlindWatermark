@@ -272,7 +272,7 @@ class DecodeBlindWatermarkAdvanced:
                 input = input.resize(original_size)
         
         input = np.array(input)[:, :, ::-1]
-        bwm = watermark(seed_a, seed_b, strength, wm_shape=(64, 64), block_shape=(int(block_size),int(block_size)), dwt_deep=int(robustness))
+        bwm = watermark(seed_a, seed_b, strength, wm_shape=(watermark_size, watermark_size), block_shape=(int(block_size),int(block_size)), dwt_deep=int(robustness))
         result = bwm.init_block_add_index(input.shape)
         if not result:
             raise RuntimeError("The size of the watermark exceeds the image capacity!")
