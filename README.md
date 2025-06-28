@@ -1,2 +1,10 @@
 # ComfyUI-BlindWatermark
-Embeds an invisible watermark in your artwork / 在生成的图片中嵌入不可见的隐形水印
+Embeds an invisible watermark in the input image
+
+## Preview
+![](./img/preview.jpg)
+
+## Usage
+- strength: **larger = more robust** (but also more artifacts)  
+- block_size: **larger = more invisible** (but image may not have enough space)  
+- robustness: **larger = more robust** (but image may not have enough space)  
