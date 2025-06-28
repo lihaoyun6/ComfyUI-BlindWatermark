@@ -17,25 +17,23 @@ class watermark():
         self.color_mod = color_mod
         self.dwt_deep = dwt_deep
 
-
-
     def init_block_add_index(self,img_shape):
         #假设原图长宽均为2的整数倍,同时假设水印为64*64,则32*32*4
         #分块并DCT
         shape0_int,shape1_int = int(img_shape[0]/self.block_shape[0]),int(img_shape[1]/self.block_shape[1])
         if not shape0_int*shape1_int>=self.wm_shape[0]*self.wm_shape[1]:
-            return False,"Unable to embed watermark! Try reducing \"block_size\" or \"robustness\"."
+            return False
         self.part_shape = (shape0_int*self.block_shape[0],shape1_int*(self.block_shape[1]))
         self.block_add_index0,self.block_add_index1 = np.meshgrid(np.arange(shape0_int),np.arange(shape1_int))
         self.block_add_index0,self.block_add_index1 = self.block_add_index0.flatten(),self.block_add_index1.flatten()
         self.length = self.block_add_index0.size
         #验证没有意义,但是我不验证不舒服斯基
         assert self.block_add_index0.size==self.block_add_index1.size
-        return True,""
+        return True
         
 
     def read_ori_img(self, src):
-        #傻逼opencv因为数组类型不会变,输入是uint8输出也是uint8,而UV可以是负数且uint8会去掉小数部分
+        #opencv数组类型不会变,输入是uint8输出也是uint8,而UV可以是负数且uint8会去掉小数部分
         ori_img = src.astype(np.float32)
         self.ori_img_shape = ori_img.shape[:2]
         if self.color_mod == 'RGB':
@@ -102,13 +100,13 @@ class watermark():
         self.wm_shape = self.wm.shape[:2]
 
         #初始化块索引数组,因为需要验证块是否足够存储水印信息,所以才放在这儿
-        result, info = self.init_block_add_index(self.ha_Y.shape)
+        result = self.init_block_add_index(self.ha_Y.shape)
 
         self.wm_flatten = self.wm.flatten()
         if self.random_seed_wm:
             self.random_wm = np.random.RandomState(self.random_seed_wm)
             self.random_wm.shuffle(self.wm_flatten)
-        return result, info
+        return result
 
     def block_add_wm(self,block,index,i):
         

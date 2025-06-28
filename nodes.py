@@ -68,9 +68,9 @@ class ApplyBlindWatermark:
         for img in original_images:
             print(f"[BlindWatermark] Embedding image {num}/{len(original_image)} ...")
             bwm.read_ori_img(np.array(img)[:, :, ::-1])
-            result, info = bwm.read_wm(wm_img[:, :, ::-1])
+            result = bwm.read_wm(wm_img[:, :, ::-1])
             if not result:
-                raise RuntimeError(info)
+                raise RuntimeError("Unable to embed watermark, input image size is too small!")
             results.append(bwm.embed()[:, :, ::-1])
             num += 1
         print(f"[BlindWatermark] All done.")
@@ -88,6 +88,11 @@ class ApplyBlindWatermarkAdvanced:
                     "min": 0,
                     "max": 1125899906842624,
                     "step": 1
+                }),
+                "watermark_size": ("INT", {
+                    "default": 64,
+                    "min": 16,
+                    "step": 2
                 }),
                 "strength": ("INT", {
                     "default": 30,
@@ -117,13 +122,13 @@ robustness: larger = more robust (but image may not have enough space)"""
     def IS_CHANGED(cls, *args, **kwargs):
         return True
 
-    def apply_blind_watermark(self, original_image, watermark_image, seed, strength, block_size, robustness):
+    def apply_blind_watermark(self, original_image, watermark_image, seed, watermark_size, strength, block_size, robustness):
         num = 1
         results = []
         seed_hash = number_hash(seed)
         seed_a = int(str(seed_hash)[:4])
         seed_b = int(str(seed_hash)[-4:])
-        wm_img = np.array(tensor2pil(watermark_image)[0].resize((64, 64)).convert("RGB"))
+        wm_img = np.array(tensor2pil(watermark_image)[0].resize((watermark_size, watermark_size)).convert("RGB"))
         print("[BlindWatermark] Watermark loaded.")
         
         bwm = watermark(seed_a, seed_b, strength, block_shape=(int(block_size),int(block_size)), dwt_deep=int(robustness))
@@ -131,9 +136,9 @@ robustness: larger = more robust (but image may not have enough space)"""
         for img in original_images:
             print(f"[BlindWatermark] Embedding image {num}/{len(original_image)} ...")
             bwm.read_ori_img(np.array(img)[:, :, ::-1])
-            result, info = bwm.read_wm(wm_img[:, :, ::-1])
+            result = bwm.read_wm(wm_img[:, :, ::-1])
             if not result:
-                raise RuntimeError(info)
+                raise RuntimeError("Unable to embed watermark! Try reducing \"watermark_size\" or \"block_size\" or \"robustness\"!")
             results.append(bwm.embed()[:, :, ::-1])
             num += 1
         print(f"[BlindWatermark] All done.")
@@ -171,6 +176,9 @@ class DecodeBlindWatermark:
         input = tensor2pil(image)[0]
         input = np.array(input)[:, :, ::-1]
         bwm = watermark(seed_a, seed_b, 30, wm_shape=(64, 64), block_shape=(6, 6), dwt_deep=1)
+        result = bwm.init_block_add_index(image.shape)
+        if not result:
+            raise RuntimeError("The size of the watermark exceeds the image capacity!")
         print("[BlindWatermark] Extracting watermark...")
         wm_imgs = bwm.extract(input, channel="YUV", invert="")
         print("[BlindWatermark] Done.")
@@ -183,6 +191,12 @@ class DecodeBlindWatermarkAdvanced:
         return {
             "required": {
                 "image": ("IMAGE",),
+                "original_seed": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 1125899906842624,
+                    "step": 1
+                }),
                 "original_width": ("INT", {
                     "default": -1,
                     "step": 1
@@ -191,11 +205,10 @@ class DecodeBlindWatermarkAdvanced:
                     "default": -1,
                     "step": 1
                 }),
-                "original_seed": ("INT", {
-                    "default": 0,
-                    "min": 0,
-                    "max": 1125899906842624,
-                    "step": 1
+                "watermark_size": ("INT", {
+                    "default": 64,
+                    "min": 16,
+                    "step": 2
                 }),
                 "strength": ("INT", {
                     "default": 30,
@@ -231,7 +244,7 @@ class DecodeBlindWatermarkAdvanced:
     def IS_CHANGED(cls, *args, **kwargs):
         return True
     
-    def decode_blind_watermark(self, image, original_width, original_height, original_seed, strength, block_size, robustness, y_channel, u_channel, v_channel):
+    def decode_blind_watermark(self, image, original_seed, original_width, original_height, watermark_size, strength, block_size, robustness, y_channel, u_channel, v_channel):
         channels = []
         inverts = []
         if y_channel in ["on", "invert"]:
@@ -260,6 +273,9 @@ class DecodeBlindWatermarkAdvanced:
         
         input = np.array(input)[:, :, ::-1]
         bwm = watermark(seed_a, seed_b, strength, wm_shape=(64, 64), block_shape=(int(block_size),int(block_size)), dwt_deep=int(robustness))
+        result = bwm.init_block_add_index(input.shape)
+        if not result:
+            raise RuntimeError("The size of the watermark exceeds the image capacity!")
         print(f"[BlindWatermark] Extracting watermark from channel {'/'.join(channels)}...")
         wm_imgs = bwm.extract(input, channel="".join(channels), invert="".join(inverts))
         img = Image.fromarray(np.uint8(wm_imgs[-1])).convert("RGB")
