@@ -199,10 +199,12 @@ class DecodeBlindWatermarkAdvanced:
                 }),
                 "original_width": ("INT", {
                     "default": -1,
+                    "min": -1,
                     "step": 1
                 }),
                 "original_height": ("INT", {
                     "default": -1,
+                    "min": -1,
                     "step": 1
                 }),
                 "watermark_size": ("INT", {
@@ -213,7 +215,7 @@ class DecodeBlindWatermarkAdvanced:
                 "strength": ("INT", {
                     "default": 30,
                     "min": 10,
-                    "max": 99,
+                    "max": 98,
                     "step": 1
                 }),
                 "block_size": (["2", "4", "6", "8"], {
