@@ -176,7 +176,7 @@ class DecodeBlindWatermark:
         input = tensor2pil(image)[0]
         input = np.array(input)[:, :, ::-1]
         bwm = watermark(seed_a, seed_b, 30, wm_shape=(64, 64), block_shape=(6, 6), dwt_deep=1)
-        result = bwm.init_block_add_index(image.shape)
+        result = bwm.init_block_add_index(input.shape)
         if not result:
             raise RuntimeError("The size of the watermark exceeds the image capacity!")
         print("[BlindWatermark] Extracting watermark...")
