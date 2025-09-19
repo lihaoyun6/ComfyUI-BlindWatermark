@@ -282,6 +282,20 @@ robustness: larger = more robust (but image may not have enough space)"""
             num += 1
         print(f"[BlindWatermark] All done.")
         return (array2tensor(results),)
+    
+def process_pil_image(mode: str, pil_image: Image.Image, password: str) -> Image.Image:
+    img_rgba = pil_image.convert("RGBA")
+    img_data = np.array(img_rgba)
+    
+    if mode == 'encrypt':
+        processed_data = encrypt_data(img_data, password)
+    elif mode == 'decrypt':
+        processed_data = decrypt_data(img_data, password)
+    else:
+        raise ValueError("Mode must be 'encrypt' or 'decrypt'")
+        
+    result_img = Image.fromarray(processed_data, 'RGBA')
+    return result_img
 
 class DecodeBlindWatermark:
     @classmethod
