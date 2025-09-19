@@ -30,7 +30,7 @@ def number_hash(data, length=8):
 
 def get_passwd(password: str):
     if not (isinstance(password, str) and len(password) == 4 and password.isdigit()):
-        raise ValueError("Password must be between 0000 ~ 9999!")
+        raise ValueError("Password must be a four-digit numeric string")
     step = int(password[0:2])
     v = int(password[2:3])
     h = int(password[3:4])
@@ -100,49 +100,49 @@ def encrypt_data(img_data, password):
     height, width, _ = img_data.shape
     data = img_data.reshape(-1, 4)
     total_pixels = width * height
+    
     curve_np = np.array(gilbert2d(width, height), dtype=np.int64)
     old_indices = curve_np[:, 1] * width + curve_np[:, 0]
-    offset = round(((math.sqrt(5) - 1) / 2) * total_pixels)
-    new_pos_indices = (np.arange(total_pixels, dtype=np.int64) + offset) % total_pixels
+    
+    offset_float = ((math.sqrt(5) - 1) / 2) * total_pixels
+    offset = int(math.floor(offset_float + 0.5))
+    
+    new_pos_indices_on_curve = (np.arange(total_pixels, dtype=np.int64) + offset) % total_pixels
+    
     initial_map = np.empty_like(old_indices)
-    initial_map[old_indices] = old_indices[new_pos_indices]
+    initial_map[old_indices[new_pos_indices_on_curve]] = old_indices
+    
     final_map = calculate_final_mapping(initial_map, step)
     scrambled_flat_data = data[final_map]
+    
     scrambled_data = scrambled_flat_data.reshape(height, width, 4)
     padded_data = add_padding(scrambled_data, width, height, v, h)
     return padded_data
 
 def decrypt_data(img_data, password):
     step, v, h = get_passwd(password)
+    
     cropped_data = crop_image_data(img_data, v, h)
     height, width, _ = cropped_data.shape
     data = cropped_data.reshape(-1, 4)
     total_pixels = width * height
+    
     curve_np = np.array(gilbert2d(width, height), dtype=np.int64)
     old_indices = curve_np[:, 1] * width + curve_np[:, 0]
-    offset = round(((math.sqrt(5) - 1) / 2) * total_pixels)
-    new_pos_indices = (np.arange(total_pixels, dtype=np.int64) + offset) % total_pixels
-    inverse_initial_map = np.empty_like(old_indices)
-    inverse_initial_map[old_indices[new_pos_indices]] = old_indices
-    final_inverse_map = calculate_final_mapping(inverse_initial_map, step)
-    unscrambled_flat_data = data[final_inverse_map]
+    
+    offset_float = ((math.sqrt(5) - 1) / 2) * total_pixels
+    offset = int(math.floor(offset_float + 0.5))
+    
+    new_pos_indices_on_curve = (np.arange(total_pixels, dtype=np.int64) + offset) % total_pixels
+    
+    initial_map = np.empty_like(old_indices)
+    initial_map[old_indices] = old_indices[new_pos_indices_on_curve]
+    
+    final_map = calculate_final_mapping(initial_map, step)
+    unscrambled_flat_data = data[final_map]
+    
     unscrambled_data = unscrambled_flat_data.reshape(height, width, 4)
     return unscrambled_data
-
-def process_pil_image(mode: str, pil_image: Image.Image, password: str) -> Image.Image:
-    img_rgba = pil_image.convert("RGBA")
-    img_data = np.array(img_rgba)
-    
-    if mode == 'encrypt':
-        processed_data = encrypt_data(img_data, password)
-    elif mode == 'decrypt':
-        processed_data = decrypt_data(img_data, password)
-    else:
-        raise ValueError("Mode must be 'encrypt' or 'decrypt'")
-        
-    result_img = Image.fromarray(processed_data, 'RGBA')
-    
-    return result_img
 
 class EncryptDecryptImage:
     @classmethod
