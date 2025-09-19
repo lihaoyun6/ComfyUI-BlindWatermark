@@ -1,5 +1,6 @@
 import zlib
 import torch
+import math
 import numpy as np
 from PIL import Image
 from .BlindWatermark import watermark
@@ -26,6 +27,144 @@ def array2tensor(image):
 def number_hash(data, length=8):
     crc = zlib.crc32(str(data).encode())
     return str(crc % (10 ** length)).zfill(length)
+
+def get_passwd(password: str):
+    if not (isinstance(password, str) and len(password) == 4 and password.isdigit()):
+        raise ValueError("Password must be between 0000 ~ 9999!")
+    step = int(password[0:2])
+    v = int(password[2:3])
+    h = int(password[3:4])
+    return max(1, step), v, h
+
+def _generate2d(x, y, ax, ay, bx, by, coordinates):
+    w = abs(ax + ay)
+    h = abs(bx + by)
+    dax, day = int(np.sign(ax)), int(np.sign(ay))
+    dbx, dby = int(np.sign(bx)), int(np.sign(by))
+    if h == 1:
+        for _ in range(w):
+            coordinates.append((x, y)); x += dax; y += day
+        return
+    if w == 1:
+        for _ in range(h):
+            coordinates.append((x, y)); x += dbx; y += dby
+        return
+    ax2, ay2 = ax // 2, ay // 2
+    bx2, by2 = bx // 2, by // 2
+    w2, h2 = abs(ax2 + ay2), abs(bx2 + by2)
+    if 2 * w > 3 * h:
+        if (w2 % 2) and (w > 2): ax2 += dax; ay2 += day
+        _generate2d(x, y, ax2, ay2, bx, by, coordinates)
+        _generate2d(x + ax2, y + ay2, ax - ax2, ay - ay2, bx, by, coordinates)
+    else:
+        if (h2 % 2) and (h > 2): bx2 += dbx; by2 += dby
+        _generate2d(x, y, bx2, by2, ax2, ay2, coordinates)
+        _generate2d(x + bx2, y + by2, ax, ay, bx - bx2, by - by2, coordinates)
+        _generate2d(x + (ax - dax) + (bx2 - dbx), y + (ay - day) + (by2 - dby), -bx2, -by2, -(ax - ax2), -(ay - ay2), coordinates)
+        
+def gilbert2d(width, height):
+    coordinates = []
+    if width >= height: _generate2d(0, 0, width, 0, 0, height, coordinates)
+    else: _generate2d(0, 0, 0, height, width, 0, coordinates)
+    return coordinates
+
+def add_padding(original_data, original_width, original_height, extra_cols, extra_rows):
+    new_width, new_height = original_width + extra_cols, original_height + extra_rows
+    padded_data = np.zeros((new_height, new_width, 4), dtype=np.uint8)
+    padded_data[:original_height, :original_width] = original_data
+    if extra_cols > 0:
+        last_col = original_data[:, -1, :]
+        padded_data[:original_height, original_width:] = last_col[:, np.newaxis, :]
+    if extra_rows > 0:
+        last_row = padded_data[original_height - 1, :, :]
+        padded_data[original_height:, :] = last_row[np.newaxis, :, :]
+    return padded_data
+
+def crop_image_data(image_data, remove_columns, remove_rows):
+    original_height, original_width, _ = image_data.shape
+    return image_data[:original_height - remove_rows, :original_width - remove_columns, :]
+
+def calculate_final_mapping(initial_map, steps):
+    size = len(initial_map)
+    final_map = np.arange(size, dtype=np.int64)
+    current_power_map = initial_map
+    while steps > 0:
+        if steps % 2 == 1:
+            final_map = current_power_map[final_map]
+        current_power_map = current_power_map[current_power_map]
+        steps //= 2
+    return final_map
+
+def encrypt_data(img_data, password):
+    step, v, h = get_passwd(password)
+    height, width, _ = img_data.shape
+    data = img_data.reshape(-1, 4)
+    total_pixels = width * height
+    curve_np = np.array(gilbert2d(width, height), dtype=np.int64)
+    old_indices = curve_np[:, 1] * width + curve_np[:, 0]
+    offset = round(((math.sqrt(5) - 1) / 2) * total_pixels)
+    new_pos_indices = (np.arange(total_pixels, dtype=np.int64) + offset) % total_pixels
+    initial_map = np.empty_like(old_indices)
+    initial_map[old_indices] = old_indices[new_pos_indices]
+    final_map = calculate_final_mapping(initial_map, step)
+    scrambled_flat_data = data[final_map]
+    scrambled_data = scrambled_flat_data.reshape(height, width, 4)
+    padded_data = add_padding(scrambled_data, width, height, v, h)
+    return padded_data
+
+def decrypt_data(img_data, password):
+    step, v, h = get_passwd(password)
+    cropped_data = crop_image_data(img_data, v, h)
+    height, width, _ = cropped_data.shape
+    data = cropped_data.reshape(-1, 4)
+    total_pixels = width * height
+    curve_np = np.array(gilbert2d(width, height), dtype=np.int64)
+    old_indices = curve_np[:, 1] * width + curve_np[:, 0]
+    offset = round(((math.sqrt(5) - 1) / 2) * total_pixels)
+    new_pos_indices = (np.arange(total_pixels, dtype=np.int64) + offset) % total_pixels
+    inverse_initial_map = np.empty_like(old_indices)
+    inverse_initial_map[old_indices[new_pos_indices]] = old_indices
+    final_inverse_map = calculate_final_mapping(inverse_initial_map, step)
+    unscrambled_flat_data = data[final_inverse_map]
+    unscrambled_data = unscrambled_flat_data.reshape(height, width, 4)
+    return unscrambled_data
+
+def process_pil_image(mode: str, pil_image: Image.Image, password: str) -> Image.Image:
+    img_rgba = pil_image.convert("RGBA")
+    img_data = np.array(img_rgba)
+    
+    if mode == 'encrypt':
+        processed_data = encrypt_data(img_data, password)
+    elif mode == 'decrypt':
+        processed_data = decrypt_data(img_data, password)
+    else:
+        raise ValueError("Mode must be 'encrypt' or 'decrypt'")
+        
+    result_img = Image.fromarray(processed_data, 'RGBA')
+    
+    return result_img
+
+class EncryptDecryptImage:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                "image": ("IMAGE", ),
+                "mode": (["encrypt", "decrypt"], {"default": "encrypt"}),
+                "password": ("STRING", ),
+                }}
+    
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "main"
+    
+    CATEGORY = "image"
+    
+    def main(self, image, mode, password):
+        results = []
+        images = tensor2pil(image)
+        password = password if password != "" else "0000"
+        for image in images:
+            results.append(process_pil_image(mode, image, password))
+        return (array2tensor(results), )
 
 class ApplyBlindWatermark:
     @classmethod
@@ -285,6 +424,7 @@ class DecodeBlindWatermarkAdvanced:
         return (pil2tensor([img]),)
 
 NODE_CLASS_MAPPINGS = {
+    "EncryptDecryptImage": EncryptDecryptImage,
     "ApplyBlindWatermark": ApplyBlindWatermark,
     "ApplyBlindWatermarkAdvanced": ApplyBlindWatermarkAdvanced,
     "DecodeBlindWatermark": DecodeBlindWatermark,
@@ -292,6 +432,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "EncryptDecryptImage": "Encrypt/Decrypt Image",
     "ApplyBlindWatermark": "Apply Blind Watermark",
     "ApplyBlindWatermarkAdvanced": "Apply Blind Watermark (Advanced)",
     "DecodeBlindWatermark": "Decode Blind Watermark",
