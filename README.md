@@ -2,7 +2,8 @@
 Embeds an invisible watermark in the input image
 
 ## Preview
-![](./img/preview.jpg)
+![](./img/preview.jpg)  
+![](./img/preview2.jpg)  
 
 ## Usage
 - strength: **larger = more robust** (but also more artifacts)  
