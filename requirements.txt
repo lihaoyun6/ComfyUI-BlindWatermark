@@ -2,3 +2,4 @@ pillow
 opencv-python
 numpy
 pywavelets
+numba

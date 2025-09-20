@@ -1,6 +1,7 @@
 import zlib
 import torch
 import math
+import numba
 import numpy as np
 from PIL import Image
 from .BlindWatermark import watermark
@@ -30,43 +31,11 @@ def number_hash(data, length=8):
 
 def get_passwd(password: str):
     if not (isinstance(password, str) and len(password) == 4 and password.isdigit()):
-        raise ValueError("Password must be a four-digit numeric string")
+        raise ValueError("Password must be a 4-digit numeric string!")
     step = int(password[0:2])
     v = int(password[2:3])
     h = int(password[3:4])
     return max(1, step), v, h
-
-def _generate2d(x, y, ax, ay, bx, by, coordinates):
-    w = abs(ax + ay)
-    h = abs(bx + by)
-    dax, day = int(np.sign(ax)), int(np.sign(ay))
-    dbx, dby = int(np.sign(bx)), int(np.sign(by))
-    if h == 1:
-        for _ in range(w):
-            coordinates.append((x, y)); x += dax; y += day
-        return
-    if w == 1:
-        for _ in range(h):
-            coordinates.append((x, y)); x += dbx; y += dby
-        return
-    ax2, ay2 = ax // 2, ay // 2
-    bx2, by2 = bx // 2, by // 2
-    w2, h2 = abs(ax2 + ay2), abs(bx2 + by2)
-    if 2 * w > 3 * h:
-        if (w2 % 2) and (w > 2): ax2 += dax; ay2 += day
-        _generate2d(x, y, ax2, ay2, bx, by, coordinates)
-        _generate2d(x + ax2, y + ay2, ax - ax2, ay - ay2, bx, by, coordinates)
-    else:
-        if (h2 % 2) and (h > 2): bx2 += dbx; by2 += dby
-        _generate2d(x, y, bx2, by2, ax2, ay2, coordinates)
-        _generate2d(x + bx2, y + by2, ax, ay, bx - bx2, by - by2, coordinates)
-        _generate2d(x + (ax - dax) + (bx2 - dbx), y + (ay - day) + (by2 - dby), -bx2, -by2, -(ax - ax2), -(ay - ay2), coordinates)
-        
-def gilbert2d(width, height):
-    coordinates = []
-    if width >= height: _generate2d(0, 0, width, 0, 0, height, coordinates)
-    else: _generate2d(0, 0, 0, height, width, 0, coordinates)
-    return coordinates
 
 def add_padding(original_data, original_width, original_height, extra_cols, extra_rows):
     new_width, new_height = original_width + extra_cols, original_height + extra_rows
@@ -84,12 +53,59 @@ def crop_image_data(image_data, remove_columns, remove_rows):
     original_height, original_width, _ = image_data.shape
     return image_data[:original_height - remove_rows, :original_width - remove_columns, :]
 
+@numba.njit(cache=True)
+def _generate2d_numba(x, y, ax, ay, bx, by, coordinates, i):
+    """Numba-optimized recursive helper. Fills a pre-allocated array."""
+    w = abs(ax + ay)
+    h = abs(bx + by)
+    
+    # Sign calculations must be explicit for Numba
+    dax = int(np.sign(ax)); day = int(np.sign(ay))
+    dbx = int(np.sign(bx)); dby = int(np.sign(by))
+    
+    if h == 1:
+        for _ in range(w):
+            coordinates[i] = (x, y); i += 1; x += dax; y += day
+        return i
+    if w == 1:
+        for _ in range(h):
+            coordinates[i] = (x, y); i += 1; x += dbx; y += dby
+        return i
+    
+    ax2, ay2 = ax // 2, ay // 2
+    bx2, by2 = bx // 2, by // 2
+    w2, h2 = abs(ax2 + ay2), abs(bx2 + by2)
+    
+    if 2 * w > 3 * h:
+        if (w2 % 2) and (w > 2): ax2 += dax; ay2 += day
+        i = _generate2d_numba(x, y, ax2, ay2, bx, by, coordinates, i)
+        i = _generate2d_numba(x + ax2, y + ay2, ax - ax2, ay - ay2, bx, by, coordinates, i)
+    else:
+        if (h2 % 2) and (h > 2): bx2 += dbx; by2 += dby
+        i = _generate2d_numba(x, y, bx2, by2, ax2, ay2, coordinates, i)
+        i = _generate2d_numba(x + bx2, y + by2, ax, ay, bx - bx2, by - by2, coordinates, i)
+        i = _generate2d_numba(x + (ax - dax) + (bx2 - dbx), y + (ay - day) + (by2 - dby), -bx2, -by2, -(ax - ax2), -(ay - ay2), coordinates, i)
+    return i
+
+def gilbert2d(width, height):
+    """Wrapper for the Numba-optimized Hilbert curve generator."""
+    # Pre-allocate array for massive performance gain with Numba
+    coordinates = np.empty((width * height, 2), dtype=np.int64)
+    if width >= height:
+        _generate2d_numba(0, 0, width, 0, 0, height, coordinates, 0)
+    else:
+        _generate2d_numba(0, 0, 0, height, width, 0, coordinates, 0)
+    return coordinates
+
+@numba.njit(cache=True)
 def calculate_final_mapping(initial_map, steps):
+    """Numba-optimized version of the mapping calculation."""
     size = len(initial_map)
     final_map = np.arange(size, dtype=np.int64)
     current_power_map = initial_map
     while steps > 0:
         if steps % 2 == 1:
+            # Numba compiles this advanced indexing into a highly efficient loop
             final_map = current_power_map[final_map]
         current_power_map = current_power_map[current_power_map]
         steps //= 2
@@ -101,7 +117,8 @@ def encrypt_data(img_data, password):
     data = img_data.reshape(-1, 4)
     total_pixels = width * height
     
-    curve_np = np.array(gilbert2d(width, height), dtype=np.int64)
+    # Now calls the fast, Numba-compiled gilbert2d
+    curve_np = gilbert2d(width, height)
     old_indices = curve_np[:, 1] * width + curve_np[:, 0]
     
     offset_float = ((math.sqrt(5) - 1) / 2) * total_pixels
@@ -112,6 +129,7 @@ def encrypt_data(img_data, password):
     initial_map = np.empty_like(old_indices)
     initial_map[old_indices[new_pos_indices_on_curve]] = old_indices
     
+    # Now calls the fast, Numba-compiled mapping calculation
     final_map = calculate_final_mapping(initial_map, step)
     scrambled_flat_data = data[final_map]
     
@@ -127,7 +145,7 @@ def decrypt_data(img_data, password):
     data = cropped_data.reshape(-1, 4)
     total_pixels = width * height
     
-    curve_np = np.array(gilbert2d(width, height), dtype=np.int64)
+    curve_np = gilbert2d(width, height)
     old_indices = curve_np[:, 1] * width + curve_np[:, 0]
     
     offset_float = ((math.sqrt(5) - 1) / 2) * total_pixels
@@ -143,6 +161,20 @@ def decrypt_data(img_data, password):
     
     unscrambled_data = unscrambled_flat_data.reshape(height, width, 4)
     return unscrambled_data
+
+def process_pil_image(mode: str, pil_image: Image.Image, password: str) -> Image.Image:
+    img_rgba = pil_image.convert("RGBA")
+    img_data = np.array(img_rgba)
+    
+    if mode == 'encrypt':
+        processed_data = encrypt_data(img_data, password)
+    elif mode == 'decrypt':
+        processed_data = decrypt_data(img_data, password)
+    else:
+        raise ValueError("Mode must be 'encrypt' or 'decrypt'")
+        
+    result_img = Image.fromarray(processed_data, 'RGBA')
+    return result_img
 
 class EncryptDecryptImage:
     @classmethod
@@ -282,20 +314,6 @@ robustness: larger = more robust (but image may not have enough space)"""
             num += 1
         print(f"[BlindWatermark] All done.")
         return (array2tensor(results),)
-    
-def process_pil_image(mode: str, pil_image: Image.Image, password: str) -> Image.Image:
-    img_rgba = pil_image.convert("RGBA")
-    img_data = np.array(img_rgba)
-    
-    if mode == 'encrypt':
-        processed_data = encrypt_data(img_data, password)
-    elif mode == 'decrypt':
-        processed_data = decrypt_data(img_data, password)
-    else:
-        raise ValueError("Mode must be 'encrypt' or 'decrypt'")
-        
-    result_img = Image.fromarray(processed_data, 'RGBA')
-    return result_img
 
 class DecodeBlindWatermark:
     @classmethod
